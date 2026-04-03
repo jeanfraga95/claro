@@ -205,7 +205,7 @@ def main():
         print("❌ Login falhou")
         return
     
-    PORT = 8080
+    PORT = 8088
     handler = lambda *args, **kwargs: StreamHandler(*args, claro_instance=claro, **kwargs)
     
     with socketserver.TCPServer(("", PORT), handler) as httpd:
