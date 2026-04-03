@@ -55,7 +55,7 @@ class ClaroTV:
             
             # Dados do form de login
             login_data = {
-                'username': '309.420.858-41',
+                'username': '30942085841',
                 'password': 'Mirian83',
                 '_token': csrf_token,
             }
