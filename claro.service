@@ -1,1 +1,23 @@
+[Unit]
+Description=Claro TV+ Stream Server
+After=network-online.target
+Wants=network-online.target
 
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/claro-tv
+Environment=PATH=/opt/claro-tv/venv/bin
+ExecStart=/opt/claro-tv/venv/bin/python /opt/claro-tv/claro.py
+Restart=always
+RestartSec=10
+LimitNOFILE=65536
+
+# Security
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/opt/claro-tv
+
+[Install]
+WantedBy=multi-user.target
