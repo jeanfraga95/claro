@@ -13,6 +13,7 @@ import threading
 import time
 import uuid
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from typing import Optional, Dict, Tuple
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 import requests
@@ -168,7 +169,7 @@ class ClaroSession:
         self.last_keepalive = 0.0
         self.login_attempts = 0
         self.last_error     = ""
-        self.stream_cache   = {}                       # channel_id → (url, ts)
+        self.stream_cache: Dict[str, Tuple[str, float]] = {}   # channel_id → (url, ts)
         self.lock           = threading.Lock()
 
         self._set_base_headers()
@@ -356,7 +357,7 @@ class ClaroSession:
             return False
 
     # ── 5. Obter URL CDN ──────────────────────────────────────────────────────
-    def get_stream_url(self, channel_id: int, channel_name="PCTV") -> str | None:
+    def get_stream_url(self, channel_id: int, channel_name: str = "PCTV") -> Optional[str]:
         cache_key = str(channel_id)
         # Cache de 8 min (tokens duram ~10-11 min)
         if cache_key in self.stream_cache:
@@ -411,7 +412,7 @@ class ClaroSession:
             log.error(f"Exceção getcdn: {e}")
         return None
 
-    def _extract_url(self, body: dict) -> str | None:
+    def _extract_url(self, body: dict) -> Optional[str]:
         """Extrai a URL de stream da resposta do getcdn."""
         if not isinstance(body, dict):
             return None
@@ -436,7 +437,7 @@ class ClaroSession:
         # Busca recursiva por qualquer campo que pareça URL de stream
         return self._deep_find_url(body)
 
-    def _deep_find_url(self, obj, depth=0) -> str | None:
+    def _deep_find_url(self, obj, depth: int = 0) -> Optional[str]:
         if depth > 6:
             return None
         if isinstance(obj, dict):
@@ -491,7 +492,7 @@ class ClaroSession:
         }
 
 
-def _fmt_ts(ts: float) -> str | None:
+def _fmt_ts(ts: float) -> Optional[str]:
     if ts == 0:
         return None
     return __import__("datetime").datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")
