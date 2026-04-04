@@ -23,7 +23,7 @@ VENV_DIR="$INSTALL_DIR/venv"
 SCRIPT_SRC="$(dirname "$(realpath "$0")")/claro.py"   # claro.py ao lado do install.sh
 SCRIPT_DST="$INSTALL_DIR/claro.py"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
-PORT="${PROXY_PORT:-8080}"
+PORT="${PROXY_PORT:-3535}"
 LOG_LEVEL="${LOG_LEVEL:-INFO}"
 
 # ── Credenciais (interativo se não passadas via env) ──────────────────────────
