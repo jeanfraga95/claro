@@ -23,11 +23,12 @@ VENV_DIR="$INSTALL_DIR/venv"
 SCRIPT_SRC="$(dirname "$(realpath "$0")")/claro.py"   # claro.py ao lado do install.sh
 SCRIPT_DST="$INSTALL_DIR/claro.py"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
-PORT="${PROXY_PORT:-3535}"
+PORT="${PROXY_PORT:-8080}"
 LOG_LEVEL="${LOG_LEVEL:-INFO}"
 
 # ── Credenciais (interativo se não passadas via env) ──────────────────────────
-CLARO_USER="${CLARO_USER:-}"
+# Aceita tanto CLARO_USER quanto SER (compatibilidade)
+CLARO_USER="${CLARO_USER:-${SER:-}}"
 CLARO_PASS="${CLARO_PASS:-}"
 CLARO_LOCATION="${CLARO_LOCATION:-SAO PAULO,SAO PAULO}"
 
@@ -160,6 +161,17 @@ apt-get update -qq
 apt-get install -y -qq python3 python3-pip python3-venv curl lsof net-tools
 ok "Pacotes instalados"
 
+# Verifica versão do Python (mínimo 3.8)
+PY_VER=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+PY_MAJOR=$(python3 -c "import sys; print(sys.version_info.major)")
+PY_MINOR=$(python3 -c "import sys; print(sys.version_info.minor)")
+info "Python encontrado: $PY_VER"
+if [[ $PY_MAJOR -lt 3 ]] || { [[ $PY_MAJOR -eq 3 ]] && [[ $PY_MINOR -lt 8 ]]; }; then
+    err "Python 3.8+ necessário. Versão atual: $PY_VER"
+    exit 1
+fi
+ok "Python $PY_VER compatível"
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # ETAPA 5 – Diretório e venv
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -214,6 +226,8 @@ cat > "$SERVICE_FILE" <<EOF
 Description=Claro TV+ Stream Proxy
 After=network-online.target
 Wants=network-online.target
+StartLimitIntervalSec=120
+StartLimitBurst=5
 
 [Service]
 Type=simple
@@ -221,8 +235,6 @@ WorkingDirectory=${INSTALL_DIR}
 ExecStart=${VENV_DIR}/bin/python3 ${SCRIPT_DST}
 Restart=always
 RestartSec=15
-StartLimitIntervalSec=120
-StartLimitBurst=5
 
 # Credenciais e configuração
 Environment="CLARO_USER=${CLARO_USER}"
