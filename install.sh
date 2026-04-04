@@ -1,140 +1,215 @@
 #!/usr/bin/env bash
-# =============================================================================
-#  Claro TV+ Stream Proxy — Instalador v2.0
-#  Ubuntu x86_64 e ARM (Oracle VPS)
+# ═══════════════════════════════════════════════════════════════════════════════
+#  Claro TV Mais – Instalador / Atualizador
 #  Uso: sudo bash install.sh
-# =============================================================================
+#        CLARO_USER="seu_cpf" CLARO_PASS="sua_senha" sudo -E bash install.sh
+# ═══════════════════════════════════════════════════════════════════════════════
 set -euo pipefail
 
+# ── Cores ─────────────────────────────────────────────────────────────────────
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
-BLUE='\033[0;34m'; CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
+CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
 
-step() { echo -e "\n${BLUE}${BOLD}▶  $*${NC}"; }
-ok()   { echo -e "${GREEN}✓  $*${NC}"; }
-warn() { echo -e "${YELLOW}⚠  $*${NC}"; }
-die()  { echo -e "${RED}✗  $*${NC}" >&2; exit 1; }
-info() { echo -e "${CYAN}   $*${NC}"; }
+ok()   { echo -e "${GREEN}✔${NC}  $*"; }
+info() { echo -e "${CYAN}→${NC}  $*"; }
+warn() { echo -e "${YELLOW}⚠${NC}  $*"; }
+err()  { echo -e "${RED}✘${NC}  $*"; }
+sep()  { echo -e "${CYAN}────────────────────────────────────────────${NC}"; }
 
-REPO_RAW="https://raw.githubusercontent.com/jeanfraga95/claro/main"
+# ── Configurações ─────────────────────────────────────────────────────────────
+SERVICE_NAME="claro-proxy"
 INSTALL_DIR="/opt/claro"
-SVC="claro-proxy"
-SERVICE_FILE="/etc/systemd/system/${SVC}.service"
-PORT="${CLARO_PORT:-8080}"
-VENV="${INSTALL_DIR}/venv"
-PYTHON="${VENV}/bin/python3"
-PIP="${VENV}/bin/pip"
+VENV_DIR="$INSTALL_DIR/venv"
+SCRIPT_SRC="$(dirname "$(realpath "$0")")/claro.py"   # claro.py ao lado do install.sh
+SCRIPT_DST="$INSTALL_DIR/claro.py"
+SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
+PORT="${PROXY_PORT:-8080}"
+LOG_LEVEL="${LOG_LEVEL:-INFO}"
 
-# ─── Banner ────────────────────────────────────────────────────────────────────
-echo -e "\n${BOLD}${CYAN}"
-echo "╔══════════════════════════════════════════════════════╗"
-echo "║      Claro TV+  Stream Proxy  —  Instalador v2.0    ║"
-echo "╚══════════════════════════════════════════════════════╝${NC}"
+# ── Credenciais (interativo se não passadas via env) ──────────────────────────
+CLARO_USER="${CLARO_USER:-}"
+CLARO_PASS="${CLARO_PASS:-}"
+CLARO_LOCATION="${CLARO_LOCATION:-SAO PAULO,SAO PAULO}"
 
-[[ $EUID -ne 0 ]] && die "Execute como root:  sudo bash install.sh"
+# ═══════════════════════════════════════════════════════════════════════════════
+echo ""
+echo -e "${BOLD}${CYAN}📡  Claro TV Mais – Instalador${NC}"
+sep
+echo ""
 
-ARCH=$(uname -m)
-info "Arquitetura: ${ARCH}"
-info "Porta: ${PORT}"
-
-# ─── Remove instalação anterior ──────────────────────────────────────────────
-if systemctl is-active --quiet "${SVC}" 2>/dev/null || \
-   [[ -d "${INSTALL_DIR}" ]]; then
-    step "Removendo instalação anterior..."
-    systemctl stop    "${SVC}" 2>/dev/null || true
-    systemctl disable "${SVC}" 2>/dev/null || true
-    rm -f "${SERVICE_FILE}"
-    rm -rf "${INSTALL_DIR}"
-    rm -f /tmp/claro_session.json
-    systemctl daemon-reload 2>/dev/null || true
-    ok "Instalação anterior removida"
+# ── Root check ────────────────────────────────────────────────────────────────
+if [[ $EUID -ne 0 ]]; then
+    err "Execute como root:  sudo bash install.sh"
+    exit 1
 fi
 
-# ─── Atualiza pacotes ─────────────────────────────────────────────────────────
-step "Atualizando pacotes..."
-apt-get update -qq
-ok "Pacotes atualizados"
+# ── Verifica se claro.py existe ───────────────────────────────────────────────
+if [[ ! -f "$SCRIPT_SRC" ]]; then
+    err "Arquivo claro.py não encontrado em: $SCRIPT_SRC"
+    err "Coloque install.sh e claro.py na mesma pasta e execute novamente."
+    exit 1
+fi
 
-# ─── Dependências de sistema ──────────────────────────────────────────────────
-step "Instalando dependências de sistema..."
-DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
-    python3 python3-pip python3-venv python3-dev \
-    wget curl ca-certificates \
-    libnss3 libatk1.0-0 libatk-bridge2.0-0 libcups2 \
-    libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 \
-    libxrandr2 libgbm1 libpango-1.0-0 libcairo2 \
-    libasound2 libxshmfence1 libx11-6 libxext6 \
-    libxcb1 fonts-liberation xdg-utils gcc make 2>/dev/null || \
-DEBIAN_FRONTEND=noninteractive apt-get install -y \
-    python3 python3-pip python3-venv python3-dev \
-    wget curl ca-certificates \
-    libnss3 libatk1.0-0 libatk-bridge2.0-0 \
-    libxkbcommon0 libgbm1 libpango-1.0-0 \
-    libasound2 libx11-6 libxext6 gcc make 2>&1 | grep -v "^E:" || true
-ok "Dependências instaladas"
+# ═══════════════════════════════════════════════════════════════════════════════
+# ETAPA 1 – Credenciais
+# ═══════════════════════════════════════════════════════════════════════════════
+sep
+info "ETAPA 1 – Credenciais Claro"
 
-# ─── Diretório ────────────────────────────────────────────────────────────────
-step "Criando diretório ${INSTALL_DIR}..."
-mkdir -p "${INSTALL_DIR}"
-ok "Diretório criado"
+if [[ -z "$CLARO_USER" || -z "$CLARO_PASS" ]]; then
+    # Tenta ler do arquivo de credenciais existente
+    CREDS_FILE="$INSTALL_DIR/claro.env"
+    if [[ -f "$CREDS_FILE" ]]; then
+        warn "Credenciais não fornecidas. Usando arquivo existente: $CREDS_FILE"
+        source "$CREDS_FILE"
+    else
+        echo ""
+        read -rp "  CPF, e-mail ou username Claro: " CLARO_USER
+        read -rsp "  Senha: " CLARO_PASS
+        echo ""
+    fi
+fi
 
-# ─── Venv Python ──────────────────────────────────────────────────────────────
-step "Criando virtualenv Python..."
-python3 -m venv "${VENV}"
-"${PIP}" install -q --upgrade pip setuptools wheel
-ok "Virtualenv criado em ${VENV}"
+if [[ -z "$CLARO_USER" || -z "$CLARO_PASS" ]]; then
+    err "Credenciais obrigatórias. Defina CLARO_USER e CLARO_PASS."
+    exit 1
+fi
 
-# ─── Pacotes Python ───────────────────────────────────────────────────────────
-step "Instalando Flask e Requests..."
-"${PIP}" install -q flask requests
-ok "Flask e Requests instalados"
+ok "Usuário: $CLARO_USER"
 
-# ─── Playwright (opcional — fallback do login) ────────────────────────────────
-step "Instalando Playwright + Chromium (fallback de login)..."
-"${PIP}" install -q playwright && \
-    "${PYTHON}" -m playwright install-deps chromium 2>/dev/null || true && \
-    "${PYTHON}" -m playwright install chromium 2>/dev/null || \
-    warn "Playwright não pôde ser instalado — login direto via API será usado (OK)"
-ok "Playwright configurado"
+# ═══════════════════════════════════════════════════════════════════════════════
+# ETAPA 2 – Remover instalação anterior
+# ═══════════════════════════════════════════════════════════════════════════════
+sep
+info "ETAPA 2 – Limpando instalação anterior"
 
-# ─── Baixa claro.py ───────────────────────────────────────────────────────────
-step "Baixando claro.py do GitHub..."
-SCRIPT="${INSTALL_DIR}/claro.py"
-if command -v wget &>/dev/null; then
-    wget -q -O "${SCRIPT}" "${REPO_RAW}/claro.py" || \
-        curl -fsSL -o "${SCRIPT}" "${REPO_RAW}/claro.py"
+# Para e desabilita serviço se existir
+if systemctl list-units --full -all 2>/dev/null | grep -q "${SERVICE_NAME}.service"; then
+    info "Parando serviço ${SERVICE_NAME}…"
+    systemctl stop  "$SERVICE_NAME" 2>/dev/null || true
+    systemctl disable "$SERVICE_NAME" 2>/dev/null || true
+    ok "Serviço parado e desabilitado"
 else
-    curl -fsSL -o "${SCRIPT}" "${REPO_RAW}/claro.py"
+    info "Serviço ${SERVICE_NAME} não encontrado (instalação nova)"
 fi
-chmod +x "${SCRIPT}"
-ok "claro.py baixado"
 
-# ─── Arquivo .env ─────────────────────────────────────────────────────────────
-ENV_FILE="${INSTALL_DIR}/.env"
-cat > "${ENV_FILE}" << EOF
-# Claro TV+ Proxy — Configuração
-CLARO_PORT=${PORT}
-# Para alterar credenciais descomente e edite:
-# CLARO_USER=seu_cpf_ou_email
-# CLARO_PASS=sua_senha
+# Remove arquivo de serviço antigo
+if [[ -f "$SERVICE_FILE" ]]; then
+    rm -f "$SERVICE_FILE"
+    systemctl daemon-reload 2>/dev/null || true
+    ok "Arquivo de serviço removido"
+fi
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ETAPA 3 – Liberar a porta
+# ═══════════════════════════════════════════════════════════════════════════════
+sep
+info "ETAPA 3 – Liberando porta $PORT"
+
+kill_port() {
+    local port="$1"
+    local pids
+
+    # Método 1: lsof
+    if command -v lsof &>/dev/null; then
+        pids=$(lsof -ti TCP:"$port" 2>/dev/null || true)
+        if [[ -n "$pids" ]]; then
+            warn "Processos usando porta $port (lsof): $pids"
+            echo "$pids" | xargs -r kill -9 2>/dev/null || true
+            sleep 1
+        fi
+    fi
+
+    # Método 2: ss + awk
+    if command -v ss &>/dev/null; then
+        pids=$(ss -tlnp "sport = :$port" 2>/dev/null \
+               | grep -oP '(?<=pid=)\d+' || true)
+        if [[ -n "$pids" ]]; then
+            warn "Processos usando porta $port (ss): $pids"
+            echo "$pids" | xargs -r kill -9 2>/dev/null || true
+            sleep 1
+        fi
+    fi
+
+    # Método 3: fuser
+    if command -v fuser &>/dev/null; then
+        fuser -k "${port}/tcp" 2>/dev/null || true
+        sleep 1
+    fi
+
+    # Verifica se a porta ficou livre
+    if command -v ss &>/dev/null; then
+        if ss -tlnp 2>/dev/null | grep -q ":$port "; then
+            err "Porta $port ainda em uso após tentativas de liberação!"
+            ss -tlnp | grep ":$port" || true
+            return 1
+        fi
+    fi
+    ok "Porta $port liberada"
+}
+
+kill_port "$PORT"
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ETAPA 4 – Dependências do sistema
+# ═══════════════════════════════════════════════════════════════════════════════
+sep
+info "ETAPA 4 – Dependências do sistema"
+
+apt-get update -qq
+apt-get install -y -qq python3 python3-pip python3-venv curl lsof net-tools
+ok "Pacotes instalados"
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ETAPA 5 – Diretório e venv
+# ═══════════════════════════════════════════════════════════════════════════════
+sep
+info "ETAPA 5 – Preparando ambiente Python"
+
+# Recria diretório limpo (mantém apenas claro.env se já existir)
+if [[ -d "$INSTALL_DIR" ]]; then
+    # Salva credenciais se existirem
+    [[ -f "$INSTALL_DIR/claro.env" ]] && cp "$INSTALL_DIR/claro.env" /tmp/claro.env.bak || true
+    rm -rf "$INSTALL_DIR"
+fi
+mkdir -p "$INSTALL_DIR"
+# Restaura credenciais
+[[ -f /tmp/claro.env.bak ]] && mv /tmp/claro.env.bak "$INSTALL_DIR/claro.env" || true
+
+# Cria venv
+python3 -m venv "$VENV_DIR"
+"$VENV_DIR/bin/pip" install --upgrade pip -q
+"$VENV_DIR/bin/pip" install requests -q
+ok "Virtualenv criado em $VENV_DIR"
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ETAPA 6 – Instala o script
+# ═══════════════════════════════════════════════════════════════════════════════
+sep
+info "ETAPA 6 – Instalando claro.py"
+
+cp "$SCRIPT_SRC" "$SCRIPT_DST"
+chmod 600 "$SCRIPT_DST"   # só root lê (tem credenciais no env)
+ok "Script instalado em $SCRIPT_DST"
+
+# Salva arquivo de credenciais (para reuso em futuras reinstalações)
+cat > "$INSTALL_DIR/claro.env" <<EOF
+CLARO_USER="${CLARO_USER}"
+CLARO_PASS="${CLARO_PASS}"
+CLARO_LOCATION="${CLARO_LOCATION}"
+PROXY_PORT="${PORT}"
+LOG_LEVEL="${LOG_LEVEL}"
 EOF
-chmod 600 "${ENV_FILE}"
+chmod 600 "$INSTALL_DIR/claro.env"
+ok "Credenciais salvas em $INSTALL_DIR/claro.env"
 
-# ─── Script wrapper ───────────────────────────────────────────────────────────
-WRAPPER="${INSTALL_DIR}/start.sh"
-cat > "${WRAPPER}" << WEOF
-#!/usr/bin/env bash
-set -euo pipefail
-# Carrega .env
-set -a; source "${INSTALL_DIR}/.env" 2>/dev/null || true; set +a
-export CLARO_PORT=\${CLARO_PORT:-${PORT}}
-export PYTHONUNBUFFERED=1
-exec "${PYTHON}" "${SCRIPT}"
-WEOF
-chmod +x "${WRAPPER}"
+# ═══════════════════════════════════════════════════════════════════════════════
+# ETAPA 7 – Serviço systemd
+# ═══════════════════════════════════════════════════════════════════════════════
+sep
+info "ETAPA 7 – Configurando serviço systemd"
 
-# ─── Serviço systemd ──────────────────────────────────────────────────────────
-step "Configurando serviço systemd..."
-cat > "${SERVICE_FILE}" << SEOF
+cat > "$SERVICE_FILE" <<EOF
 [Unit]
 Description=Claro TV+ Stream Proxy
 After=network-online.target
@@ -142,104 +217,117 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=root
 WorkingDirectory=${INSTALL_DIR}
-EnvironmentFile=-${ENV_FILE}
-Environment=CLARO_PORT=${PORT}
-Environment=PYTHONUNBUFFERED=1
-ExecStart=${WRAPPER}
+ExecStart=${VENV_DIR}/bin/python3 ${SCRIPT_DST}
 Restart=always
-RestartSec=20
-StartLimitIntervalSec=300
+RestartSec=15
+StartLimitIntervalSec=120
 StartLimitBurst=5
+
+# Credenciais e configuração
+Environment="CLARO_USER=${CLARO_USER}"
+Environment="CLARO_PASS=${CLARO_PASS}"
+Environment="CLARO_LOCATION=${CLARO_LOCATION}"
+Environment="PROXY_PORT=${PORT}"
+Environment="LOG_LEVEL=${LOG_LEVEL}"
+
+# Limites
+LimitNOFILE=65536
+
+# Logs
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=${SVC}
+SyslogIdentifier=${SERVICE_NAME}
 
 [Install]
 WantedBy=multi-user.target
-SEOF
+EOF
+
+chmod 600 "$SERVICE_FILE"
+ok "Arquivo de serviço criado: $SERVICE_FILE"
 
 systemctl daemon-reload
-systemctl enable  "${SVC}"
-systemctl start   "${SVC}"
-ok "Serviço systemd iniciado"
+systemctl enable "$SERVICE_NAME"
+ok "Serviço habilitado para iniciar no boot"
 
-# ─── Aguarda servidor ─────────────────────────────────────────────────────────
-step "Aguardando o servidor subir (máx 30s)..."
-WAIT=0
-while [[ $WAIT -lt 30 ]]; do
-    sleep 3; ((WAIT+=3))
-    if curl -sf "http://127.0.0.1:${PORT}/status" &>/dev/null; then
-        ok "Servidor respondendo na porta ${PORT}!"
-        break
-    fi
-    info "Aguardando... (${WAIT}s)"
-done
+# ═══════════════════════════════════════════════════════════════════════════════
+# ETAPA 8 – Firewall (UFW se disponível)
+# ═══════════════════════════════════════════════════════════════════════════════
+sep
+info "ETAPA 8 – Firewall"
 
-# ─── IP público ───────────────────────────────────────────────────────────────
-PIP_ADDR=""
-for svc in "https://api.ipify.org" "https://ifconfig.me/ip" "https://icanhazip.com"; do
-    PIP_ADDR=$(curl -s --max-time 5 "$svc" 2>/dev/null | tr -d '[:space:]') && \
-        [[ -n "$PIP_ADDR" ]] && break
-done
-[[ -z "$PIP_ADDR" ]] && PIP_ADDR=$(hostname -I | awk '{print $1}')
-[[ -z "$PIP_ADDR" ]] && PIP_ADDR="SEU_IP"
-
-# ─── Firewall ─────────────────────────────────────────────────────────────────
-# ufw
-if command -v ufw &>/dev/null && ufw status | grep -q "Status: active"; then
-    ufw allow "${PORT}/tcp" comment "Claro Proxy" >/dev/null 2>&1 || true
-    info "Porta ${PORT} liberada no ufw"
-fi
-# iptables (Oracle Cloud usa iptables por padrão)
-if command -v iptables &>/dev/null; then
-    if ! iptables -C INPUT -p tcp --dport "${PORT}" -j ACCEPT 2>/dev/null; then
-        iptables -I INPUT -p tcp --dport "${PORT}" -j ACCEPT 2>/dev/null || true
-        # Persiste se possível
-        iptables-save > /etc/iptables/rules.v4 2>/dev/null || \
-        iptables-save > /etc/iptables.rules 2>/dev/null || true
-        info "Regra iptables adicionada para porta ${PORT}"
-    fi
-fi
-
-# ─── Resumo ───────────────────────────────────────────────────────────────────
-if systemctl is-active --quiet "${SVC}"; then
-    SSTATUS="✅ ATIVO"
+if command -v ufw &>/dev/null && ufw status 2>/dev/null | grep -q "Status: active"; then
+    ufw allow "$PORT"/tcp comment "Claro TV Proxy" 2>/dev/null || true
+    ok "UFW: porta $PORT liberada"
 else
-    SSTATUS="⚠️  INICIANDO (aguarde ~30s)"
+    warn "UFW não ativo – verifique seu firewall manualmente se necessário"
 fi
 
-echo ""
-echo -e "${GREEN}${BOLD}"
-echo "╔══════════════════════════════════════════════════════════╗"
-echo "║        CLARO TV+ PROXY — INSTALADO COM SUCESSO          ║"
-echo "╠══════════════════════════════════════════════════════════╣"
-printf "║  %s%-52s║\n" "" "Status: ${SSTATUS}"
-echo "║                                                          ║"
-printf "║  🌐 Interface Web:                                       ║\n"
-printf "║     http://%-50s║\n" "${PIP_ADDR}:${PORT}"
-echo "║                                                          ║"
-printf "║  📋 Playlist M3U:                                        ║\n"
-printf "║     http://%-50s║\n" "${PIP_ADDR}:${PORT}/lista.m3u"
-echo "║                                                          ║"
-printf "║  📺 Exemplo de canal:                                    ║\n"
-printf "║     http://%-50s║\n" "${PIP_ADDR}:${PORT}/canal/sportv"
-echo "║                                                          ║"
-printf "║  🔬 Debug (diagnóstico):                                 ║\n"
-printf "║     http://%-50s║\n" "${PIP_ADDR}:${PORT}/debug"
-echo "╚══════════════════════════════════════════════════════════╝"
-echo -e "${NC}"
+# ═══════════════════════════════════════════════════════════════════════════════
+# ETAPA 9 – Inicia o serviço
+# ═══════════════════════════════════════════════════════════════════════════════
+sep
+info "ETAPA 9 – Iniciando serviço"
 
-echo -e "${YELLOW}${BOLD}Comandos úteis:${NC}"
-echo -e "  Logs em tempo real  : ${CYAN}journalctl -u ${SVC} -f${NC}"
-echo -e "  Status do serviço   : ${CYAN}systemctl status ${SVC}${NC}"
-echo -e "  Reiniciar           : ${CYAN}systemctl restart ${SVC}${NC}"
-echo -e "  Forçar relogin      : ${CYAN}curl http://localhost:${PORT}/relogin${NC}"
-echo -e "  Debug de sessão     : ${CYAN}curl http://localhost:${PORT}/debug | python3 -m json.tool${NC}"
+systemctl start "$SERVICE_NAME"
+sleep 4   # aguarda subir
+
+# Verifica se subiu
+if systemctl is-active --quiet "$SERVICE_NAME"; then
+    ok "Serviço ${SERVICE_NAME} rodando!"
+else
+    err "Serviço não iniciou. Últimas linhas do log:"
+    journalctl -u "$SERVICE_NAME" -n 20 --no-pager || true
+    exit 1
+fi
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ETAPA 10 – Teste rápido
+# ═══════════════════════════════════════════════════════════════════════════════
+sep
+info "ETAPA 10 – Teste de conectividade"
+
+sleep 3
+HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+    "http://127.0.0.1:${PORT}/status" --max-time 10 || echo "000")
+
+if [[ "$HTTP_CODE" == "200" ]]; then
+    ok "Proxy respondendo em http://127.0.0.1:${PORT}/status"
+
+    # Mostra status JSON formatado
+    echo ""
+    curl -s "http://127.0.0.1:${PORT}/status" \
+        | python3 -m json.tool 2>/dev/null || true
+else
+    warn "Proxy retornou HTTP $HTTP_CODE (pode ainda estar logando)"
+    warn "Aguarde alguns segundos e acesse: http://SEU_IP:${PORT}/status"
+fi
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Resumo final
+# ═══════════════════════════════════════════════════════════════════════════════
+sep
 echo ""
-echo -e "${YELLOW}Configuração em:${NC} ${CYAN}${ENV_FILE}${NC}"
-echo -e "${YELLOW}Para atualizar:${NC}   ${CYAN}sudo bash <(curl -fsSL ${REPO_RAW}/install.sh)${NC}"
+echo -e "${BOLD}${GREEN}✅  Instalação concluída!${NC}"
 echo ""
-echo -e "${YELLOW}⚠  No Oracle Cloud, abra também a porta ${PORT} no Security List da VPC!${NC}"
+
+# Detecta IP público
+PUBLIC_IP=$(curl -s --max-time 5 https://api.ipify.org 2>/dev/null \
+         || curl -s --max-time 5 https://ifconfig.me 2>/dev/null \
+         || hostname -I | awk '{print $1}')
+
+echo -e "  ${BOLD}Acesso:${NC}"
+echo -e "    http://${PUBLIC_IP}:${PORT}/          → Página inicial"
+echo -e "    http://${PUBLIC_IP}:${PORT}/status    → Status da sessão"
+echo -e "    http://${PUBLIC_IP}:${PORT}/debug     → Debug detalhado"
+echo -e "    http://${PUBLIC_IP}:${PORT}/login     → Forçar relogin"
+echo -e "    http://${PUBLIC_IP}:${PORT}/channels  → Lista de canais"
+echo -e "    http://${PUBLIC_IP}:${PORT}/stream/sportv  → Stream SportV"
 echo ""
+echo -e "  ${BOLD}Comandos úteis:${NC}"
+echo -e "    sudo systemctl status ${SERVICE_NAME}"
+echo -e "    sudo journalctl -u ${SERVICE_NAME} -f"
+echo -e "    sudo systemctl restart ${SERVICE_NAME}"
+echo -e "    sudo bash install.sh    (reinstalar/atualizar)"
+echo ""
+sep
